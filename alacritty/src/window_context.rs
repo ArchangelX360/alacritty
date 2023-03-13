@@ -200,7 +200,7 @@ impl WindowContext {
         #[cfg(not(windows))]
         let master_fd = pty.file().as_raw_fd();
         #[cfg(not(windows))]
-        let shell_pid = pty.child().id();
+        let shell_pid = pty.child_process_id();
 
         // Create the pseudoterminal I/O loop.
         //

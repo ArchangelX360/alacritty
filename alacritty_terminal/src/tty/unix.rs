@@ -106,8 +106,8 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub fn child(&self) -> &Child {
-        &self.child
+    pub fn child_process_id(&self) -> u32 {
+        self.child.id()
     }
 
     pub fn file(&self) -> &File {

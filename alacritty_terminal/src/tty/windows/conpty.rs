@@ -240,7 +240,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     let child_watcher = ChildExitWatcher::new(proc_info.hProcess)?;
     let conpty = Conpty { handle: pty_handle as HPCON, api };
 
-    Ok(Pty::new(conpty, conout, conin, child_watcher))
+    Ok(Pty::new(conpty, conout, conin, child_watcher, proc_info.dwProcessId))
 }
 
 // Windows environment variables are case-insensitive, and the caller is responsible for

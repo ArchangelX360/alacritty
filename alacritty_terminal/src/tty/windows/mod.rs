@@ -31,6 +31,7 @@ pub struct Pty {
     conout: ReadPipe,
     conin: WritePipe,
     child_watcher: ChildExitWatcher,
+    child_process_id: u32,
 }
 
 pub fn new(config: &Options, window_size: WindowSize, _window_id: u64) -> Result<Pty> {
@@ -43,8 +44,19 @@ impl Pty {
         conout: impl Into<ReadPipe>,
         conin: impl Into<WritePipe>,
         child_watcher: ChildExitWatcher,
+        child_process_id: u32,
     ) -> Self {
-        Self { backend: backend.into(), conout: conout.into(), conin: conin.into(), child_watcher }
+        Self {
+            backend: backend.into(),
+            conout: conout.into(),
+            conin: conin.into(),
+            child_watcher,
+            child_process_id,
+        }
+    }
+
+    pub fn child_process_id(&self) -> u32 {
+        self.child_process_id
     }
 
     pub fn child_watcher(&self) -> &ChildExitWatcher {
