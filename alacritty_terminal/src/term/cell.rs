@@ -33,6 +33,8 @@ bitflags! {
         const ALL_UNDERLINES            = Self::UNDERLINE.bits() | Self::DOUBLE_UNDERLINE.bits()
                                         | Self::UNDERCURL.bits() | Self::DOTTED_UNDERLINE.bits()
                                         | Self::DASHED_UNDERLINE.bits();
+        /// Set if the cell wasn't yet ever written to.
+        const UNINIT                    = 0b1000_0000_0000_0000;
     }
 }
 
@@ -146,7 +148,7 @@ impl Default for Cell {
             c: ' ',
             bg: Color::Named(NamedColor::Background),
             fg: Color::Named(NamedColor::Foreground),
-            flags: Flags::empty(),
+            flags: Flags::UNINIT,
             extra: None,
         }
     }
