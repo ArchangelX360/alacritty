@@ -3,6 +3,7 @@
 use std::ops::{Index, IndexMut, Range};
 use std::sync::Arc;
 use std::{cmp, mem, ptr, slice, str};
+use std::time::Instant;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -21,9 +22,9 @@ use crate::term::cell::{Cell, Flags, LineLength};
 use crate::term::color::Colors;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
-    self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
-    KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode, Rgb,
-    StandardCharset,
+    self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, CustomOSCCommand, Handler, Hyperlink,
+    KeyboardModes, KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode,
+    Rgb, StandardCharset,
 };
 
 pub mod cell;
@@ -265,6 +266,22 @@ impl TermDamageState {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct ExecutionInfo {
+    pub prompt: String,
+    pub exit_code: i32,
+    pub elapsed_time: u64,
+}
+
+pub struct ExecutionResult {
+    /// Grid state at the moment of execution finishing
+    pub grid: Grid<Cell>,
+    /// Terminal mode at the moment of execution finishing
+    pub mode: TermMode,
+    /// Information about finished command
+    pub info: ExecutionInfo,
+}
+
 pub struct Term<T> {
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
@@ -327,6 +344,22 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
+
+    /// If true all incoming symbols, caret movements etc. will be ignored.
+    /// Used to show commands output only.
+    ///
+    /// **Custom OSC sequences required**
+    skip_grid_commands: bool,
+
+    /// Last known timestamp of command execution start
+    ///
+    /// **Custom OSC sequences required**
+    command_start_timestamp: Option<Instant>,
+
+    /// Ordered history with information about command execution result
+    ///
+    /// **Custom OSC sequences required**
+    pub execution_results: Vec<ExecutionResult>,
 }
 
 /// Configuration options for the [`Term`].
@@ -441,6 +474,10 @@ impl<T> Term<T> {
             selection: Default::default(),
             title: Default::default(),
             mode: Default::default(),
+
+            skip_grid_commands: false,
+            command_start_timestamp: Some(Instant::now()),
+            execution_results: vec![],
         }
     }
 
@@ -740,7 +777,10 @@ impl<T> Term<T> {
     /// Expects origin to be in scroll range.
     #[inline]
     fn scroll_down_relative(&mut self, origin: Line, mut lines: usize) {
-        trace!("Scrolling down relative: origin={}, lines={}", origin, lines);
+        trace!("Scrolling down relative: origin={}, lines={}, skip={}", origin, lines, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         lines = cmp::min(lines, (self.scroll_region.end - self.scroll_region.start).0 as usize);
         lines = cmp::min(lines, (self.scroll_region.end - origin).0 as usize);
@@ -768,7 +808,10 @@ impl<T> Term<T> {
     /// Expects origin to be in scroll range.
     #[inline]
     fn scroll_up_relative(&mut self, origin: Line, mut lines: usize) {
-        trace!("Scrolling up relative: origin={}, lines={}", origin, lines);
+        trace!("Scrolling up relative: origin={}, lines={}, skip={}", origin, lines, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         lines = cmp::min(lines, (self.scroll_region.end - self.scroll_region.start).0 as usize);
 
@@ -1057,9 +1100,48 @@ impl<T> Dimensions for Term<T> {
 }
 
 impl<T: EventListener> Handler for Term<T> {
+    fn custom_command(&mut self, command: CustomOSCCommand) {
+        trace!("Custom OSC command {:?}", command);
+        match command {
+            CustomOSCCommand::ShellCommandStarted => {
+                self.skip_grid_commands = false;
+                self.command_start_timestamp = Some(Instant::now());
+            }
+            CustomOSCCommand::ShellCommandFinished(exit_code, prompt) => {
+                let elapsed_time = self.command_start_timestamp.map_or_else(
+                    || {
+                        debug!("Command start OSC didn't received");
+                        0
+                    },
+                    |x| x.elapsed().as_nanos() as u64
+                );
+                self.command_start_timestamp = None;
+
+                let grid = self.grid.clone();
+                let mode = self.mode.clone();
+                self.grid_mut().reset();
+
+                self.execution_results.push(
+                    ExecutionResult {
+                        grid,
+                        mode,
+                        info: ExecutionInfo { exit_code, prompt, elapsed_time }
+                    }
+                );
+                self.skip_grid_commands = true;
+            }
+        }
+    }
+
+
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        if self.skip_grid_commands {
+            trace!("Skip input {}", c);
+            return
+        }
+
         // Number of cells the char will occupy.
         let width = match c.width() {
             Some(width) => width,
@@ -1139,7 +1221,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn decaln(&mut self) {
-        trace!("Decalnning");
+        trace!("Decalnning: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         for line in (0..self.screen_lines()).map(Line::from) {
             for column in 0..self.columns() {
@@ -1157,7 +1242,10 @@ impl<T: EventListener> Handler for Term<T> {
         let line = Line(line);
         let col = Column(col);
 
-        trace!("Going to: line={}, col={}", line, col);
+        trace!("Going to: line={}, col={}, skip={}", line, col, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
         let (y_offset, max_y) = if self.mode.contains(TermMode::ORIGIN) {
             (self.scroll_region.start, self.scroll_region.end - 1)
         } else {
@@ -1185,6 +1273,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn insert_blank(&mut self, count: usize) {
+        if self.skip_grid_commands {
+            trace!("Skip insert blank: {}", count);
+            return
+        }
+
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
 
@@ -1231,7 +1324,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_forward(&mut self, cols: usize) {
-        trace!("Moving forward: {}", cols);
+        trace!("Moving forward: {}, skip={}", cols, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
         let last_column = cmp::min(self.grid.cursor.point.column + cols, self.last_column());
 
         let cursor_line = self.grid.cursor.point.line.0 as usize;
@@ -1243,7 +1339,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_backward(&mut self, cols: usize) {
-        trace!("Moving backward: {}", cols);
+        trace!("Moving backward: {}, skip={}", cols, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         let column = self.grid.cursor.point.column.saturating_sub(cols);
 
         let cursor_line = self.grid.cursor.point.line.0 as usize;
@@ -1364,6 +1464,11 @@ impl<T: EventListener> Handler for Term<T> {
     /// Insert tab at cursor position.
     #[inline]
     fn put_tab(&mut self, mut count: u16) {
+        if self.skip_grid_commands {
+            trace!("Skip put tab: {}", count);
+            return
+        }
+
         // A tab after the last column is the same as a linebreak.
         if self.grid.cursor.input_needs_wrap {
             self.wrapline();
@@ -1396,7 +1501,10 @@ impl<T: EventListener> Handler for Term<T> {
     /// Backspace.
     #[inline]
     fn backspace(&mut self) {
-        trace!("Backspace");
+        trace!("Backspace: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return
+        }
 
         if self.grid.cursor.point.column > Column(0) {
             let line = self.grid.cursor.point.line.0 as usize;
@@ -1410,7 +1518,11 @@ impl<T: EventListener> Handler for Term<T> {
     /// Carriage return.
     #[inline]
     fn carriage_return(&mut self) {
-        trace!("Carriage return");
+        trace!("Carriage return: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         let new_col = 0;
         let line = self.grid.cursor.point.line.0 as usize;
         self.damage.damage_line(line, new_col, self.grid.cursor.point.column.0);
@@ -1421,7 +1533,11 @@ impl<T: EventListener> Handler for Term<T> {
     /// Linefeed.
     #[inline]
     fn linefeed(&mut self) {
-        trace!("Linefeed");
+        trace!("Linefeed: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         let next = self.grid.cursor.point.line + 1;
         if next == self.scroll_region.end {
             self.scroll_up(1);
@@ -1477,7 +1593,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_horizontal_tabstop(&mut self) {
-        trace!("Setting horizontal tabstop");
+        trace!("Setting horizontal tabstop: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
         self.tabs[self.grid.cursor.point.column] = true;
     }
 
@@ -1519,7 +1638,10 @@ impl<T: EventListener> Handler for Term<T> {
     fn erase_chars(&mut self, count: usize) {
         let cursor = &self.grid.cursor;
 
-        trace!("Erasing chars: count={}, col={}", count, cursor.point.column);
+        trace!("Erasing chars: count={}, col={}, skip={}", count, cursor.point.column, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         let start = cursor.point.column;
         let end = cmp::min(start + count, Column(self.columns()));
@@ -1536,6 +1658,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn delete_chars(&mut self, count: usize) {
+        if self.skip_grid_commands {
+            trace!("Skip delete chars: {}", count);
+            return;
+        }
+
         let columns = self.columns();
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
@@ -1565,7 +1692,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn move_backward_tabs(&mut self, count: u16) {
-        trace!("Moving backward {} tabs", count);
+        trace!("Moving backward {} tabs: skip={}", count, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         let old_col = self.grid.cursor.point.column.0;
         for _ in 0..count {
@@ -1633,7 +1763,10 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_line(&mut self, mode: ansi::LineClearMode) {
-        trace!("Clearing line: {:?}", mode);
+        trace!("Clearing line: {:?}, skip={}", mode, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         let cursor = &self.grid.cursor;
         let bg = cursor.template.bg;
@@ -1748,7 +1881,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
-        trace!("Clearing screen: {:?}", mode);
+        trace!("Clearing screen: {:?}, skip={}", mode, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         let bg = self.grid.cursor.template.bg;
 
         let screen_lines = self.screen_lines();
@@ -1819,7 +1956,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn clear_tabs(&mut self, mode: ansi::TabulationClearMode) {
-        trace!("Clearing tabs: {:?}", mode);
+        trace!("Clearing tabs: {:?}, skip={}", mode, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         match mode {
             ansi::TabulationClearMode::Current => {
                 self.tabs[self.grid.cursor.point.column] = false;
@@ -1859,7 +2000,11 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn reverse_index(&mut self) {
-        trace!("Reversing index");
+        trace!("Reversing index: skip={}", self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
+
         // If cursor is at the top.
         if self.grid.cursor.point.line == self.scroll_region.start {
             self.scroll_down(1);
@@ -2165,7 +2310,10 @@ impl<T: EventListener> Handler for Term<T> {
         let start = Line(top as i32 - 1);
         let end = Line(bottom as i32);
 
-        trace!("Setting scrolling region: ({};{})", start, end);
+        trace!("Setting scrolling region: ({};{}), skip={}", start, end, self.skip_grid_commands);
+        if self.skip_grid_commands {
+            return;
+        }
 
         let screen_lines = Line(self.screen_lines() as i32);
         self.scroll_region.start = cmp::min(start, screen_lines);
