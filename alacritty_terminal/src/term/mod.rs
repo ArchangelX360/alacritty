@@ -13,8 +13,10 @@ use base64::Engine;
 use bitflags::bitflags;
 use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
+use vte::ansi::StdSyncHandler;
+use vte::Parser;
 
-use crate::event::{Event, EventListener};
+use crate::event::{Event, EventListener, VoidListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
@@ -23,8 +25,8 @@ use crate::term::color::Colors;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, CustomOSCCommand, Handler, Hyperlink,
-    KeyboardModes, KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, PrivateMode,
-    Rgb, StandardCharset,
+    KeyboardModes, KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, Performer,
+    ProcessorState, PrivateMode, Rgb, StandardCharset,
 };
 
 pub mod cell;
@@ -266,9 +268,9 @@ impl TermDamageState {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ExecutionInfo {
-    pub prompt: String,
+    pub prompt: Grid<Cell>,
     pub exit_code: i32,
     pub elapsed_time: u64,
 }
@@ -1092,6 +1094,17 @@ impl<T> Term<T> {
     }
 }
 
+fn parse_ansi<D: Dimensions>(str: &String, dimensions: &D) -> Grid<Cell> {
+    let mut term = Term::new(Config::default(), dimensions, VoidListener);
+    let mut state = ProcessorState::<StdSyncHandler>::default();
+    let mut performer = Performer::new(&mut state, &mut term);
+    let mut parser = Parser::new();
+    for byte in str.bytes() {
+        parser.advance(&mut performer, byte)
+    }
+    return term.grid;
+}
+
 impl<T> Dimensions for Term<T> {
     #[inline]
     fn columns(&self) -> usize {
@@ -1117,7 +1130,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
-            CustomOSCCommand::ShellCommandFinished(exit_code, prompt) => {
+            CustomOSCCommand::ShellCommandFinished(exit_code, raw_prompt) => {
                 let elapsed_time = self.command_start_timestamp.map_or_else(
                     || {
                         debug!("Command start OSC didn't received");
@@ -1130,6 +1143,8 @@ impl<T: EventListener> Handler for Term<T> {
                 let grid = self.grid.clone();
                 let mode = self.mode.clone();
                 self.grid_mut().reset();
+
+                let prompt = parse_ansi(&raw_prompt, self);
 
                 self.execution_results.push(ExecutionResult {
                     grid,
