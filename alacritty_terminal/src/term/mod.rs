@@ -275,13 +275,21 @@ pub struct ExecutionInfo {
     pub elapsed_time: u64,
 }
 
-pub struct ExecutionResult {
-    /// Grid state at the moment of execution finishing
-    pub grid: Grid<Cell>,
-    /// Terminal mode at the moment of execution finishing
-    pub mode: TermMode,
-    /// Information about finished command
-    pub info: ExecutionInfo,
+pub enum ExecutionEvent {
+    ExecutionStarted {
+        /// Prefix of execution unit text before output: prompt + command
+        prefix: String,
+        /// Shell command that has been executed
+        command: String,
+    },
+    ExecutionFinished {
+        /// Grid state at the moment of execution finishing
+        grid: Grid<Cell>,
+        /// Terminal mode at the moment of execution finishing
+        mode: TermMode,
+        /// Information about finished command
+        info: ExecutionInfo,
+    },
 }
 
 pub struct Term<T> {
@@ -358,10 +366,15 @@ pub struct Term<T> {
     /// **Custom OSC sequences required**
     command_start_timestamp: Option<Instant>,
 
+    /// Point of begin of last known prompt
+    ///
+    /// **Custom OSC sequences required**
+    prompt_point: Point,
+
     /// Ordered history with information about command execution result
     ///
     /// **Custom OSC sequences required**
-    pub execution_results: Vec<ExecutionResult>,
+    pub execution_events: Vec<ExecutionEvent>,
 }
 
 /// Configuration options for the [`Term`].
@@ -479,7 +492,8 @@ impl<T> Term<T> {
 
             skip_grid_commands: false,
             command_start_timestamp: Some(Instant::now()),
-            execution_results: vec![],
+            prompt_point: Point::default(),
+            execution_events: vec![],
         }
     }
 
@@ -1126,11 +1140,35 @@ impl<T: EventListener> Handler for Term<T> {
     fn custom_command(&mut self, command: CustomOSCCommand) {
         trace!("Custom OSC command {:?}", command);
         match command {
-            CustomOSCCommand::ShellCommandStarted => {
+            CustomOSCCommand::ShellCommandStarted { command } => {
+                // TODO: All this prefix calculation stuff doesnt work:
+                //   * It ignores text wrapping
+                //   * It (mostly) ignores cursor movement
+                //   * I'm not sure that we need it, but we cant calculate prompt for bash < 4.4
+                //     (for now)
+                let cur_point = self.grid.cursor.point;
+                let mut iter_start = self.prompt_point;
+                if iter_start.line == self.grid.screen_lines() - 1 {
+                    iter_start.line -= 1;
+                }
+                if iter_start.column == 0 {
+                    iter_start.line -= 1;
+                    iter_start.column = self.grid.last_column();
+                } else {
+                    iter_start.column -= 1;
+                };
+                let prefix = self
+                    .grid
+                    .iter_from(iter_start)
+                    .take_while(|c| c.point != cur_point)
+                    .filter(|c| !c.flags.contains(Flags::UNINIT))
+                    .map(|c| c.c)
+                    .collect::<String>();
+                self.execution_events.push(ExecutionEvent::ExecutionStarted { prefix, command });
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
-            CustomOSCCommand::ShellCommandFinished(exit_code, raw_prompt) => {
+            CustomOSCCommand::ShellCommandFinished { exit_code, raw_prompt, reset_grid } => {
                 let elapsed_time = self.command_start_timestamp.map_or_else(
                     || {
                         debug!("Command start OSC didn't received");
@@ -1142,16 +1180,22 @@ impl<T: EventListener> Handler for Term<T> {
 
                 let grid = self.grid.clone();
                 let mode = self.mode.clone();
-                self.grid_mut().reset();
+
+                if reset_grid {
+                    self.grid_mut().reset();
+                    self.skip_grid_commands = true;
+                } else {
+                    self.grid_mut().clear_history();
+                }
 
                 let prompt = parse_ansi(&raw_prompt, self);
 
-                self.execution_results.push(ExecutionResult {
+                self.prompt_point = self.grid.cursor.point;
+                self.execution_events.push(ExecutionEvent::ExecutionFinished {
                     grid,
                     mode,
                     info: ExecutionInfo { exit_code, prompt, elapsed_time },
                 });
-                self.skip_grid_commands = true;
             },
         }
     }
