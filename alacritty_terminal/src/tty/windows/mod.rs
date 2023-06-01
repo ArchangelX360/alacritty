@@ -3,11 +3,11 @@ use std::io::{self, Result};
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::mpsc::TryRecvError;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::windows::child::ChildExitWatcher;
-use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options, Shell};
+use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, ExitStatus, Options, Shell};
 
 mod blocking;
 mod child;
@@ -32,10 +32,16 @@ pub struct Pty {
     conin: WritePipe,
     child_watcher: ChildExitWatcher,
     child_process_id: u32,
+    on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>,
 }
 
-pub fn new(config: &Options, window_size: WindowSize, _window_id: u64) -> Result<Pty> {
-    conpty::new(config, window_size)
+pub fn new(
+    config: &Options,
+    window_size: WindowSize,
+    _window_id: u64,
+    on_exit: impl 'static + FnOnce(ExitStatus) + Send,
+) -> Result<Pty> {
+    conpty::new(config, window_size, on_exit)
 }
 
 impl Pty {
@@ -45,6 +51,7 @@ impl Pty {
         conin: impl Into<WritePipe>,
         child_watcher: ChildExitWatcher,
         child_process_id: u32,
+        on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>,
     ) -> Self {
         Self {
             backend: backend.into(),
@@ -52,6 +59,7 @@ impl Pty {
             conin: conin.into(),
             child_watcher,
             child_process_id,
+            on_exit,
         }
     }
 
@@ -126,7 +134,12 @@ impl EventedPty for Pty {
         match self.child_watcher.event_rx().try_recv() {
             Ok(ev) => Some(ev),
             Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => Some(ChildEvent::Exited(None)),
+            Err(TryRecvError::Disconnected) => {
+                if let Some(on_exit) = self.on_exit.lock().take() {
+                    on_exit(ExitStatus::Other)
+                }
+                Some(ChildEvent::Exited(None))
+            },
         }
     }
 }

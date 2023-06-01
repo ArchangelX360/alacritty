@@ -7,13 +7,13 @@ use std::mem::MaybeUninit;
 use std::os::fd::OwnedFd;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command};
 use std::sync::Arc;
 use std::{env, ptr};
 
 use libc::{c_int, TIOCSCTTY};
-use log::error;
+use log::{error, warn};
 use polling::{Event, PollMode, Poller};
 use rustix_openpty::openpty;
 use rustix_openpty::rustix::termios::Winsize;
@@ -23,7 +23,7 @@ use signal_hook::low_level::{pipe as signal_pipe, unregister as unregister_signa
 use signal_hook::{consts as sigconsts, SigId};
 
 use crate::event::{OnResize, WindowSize};
-use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options};
+use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, ExitStatus, Options};
 
 // Interest in PTY read/writes.
 pub(crate) const PTY_READ_WRITE_TOKEN: usize = 0;
@@ -98,11 +98,24 @@ fn get_pw_entry(buf: &mut [i8; 1024]) -> Result<Passwd<'_>> {
     })
 }
 
+impl From<std::process::ExitStatus> for ExitStatus {
+    fn from(exit_status: std::process::ExitStatus) -> Self {
+        if let Some(code) = exit_status.code() {
+            ExitStatus::Code(code)
+        } else if let Some(signal) = exit_status.signal() {
+            ExitStatus::Signal(signal)
+        } else {
+            ExitStatus::Other
+        }
+    }
+}
+
 pub struct Pty {
     child: Child,
     file: File,
     signals: UnixStream,
     sig_id: SigId,
+    on_exit: Option<Box<dyn FnOnce(ExitStatus) + Send>>,
 }
 
 impl Pty {
@@ -112,6 +125,12 @@ impl Pty {
 
     pub fn file(&self) -> &File {
         &self.file
+    }
+
+    fn call_on_exit_handler_once(&mut self, exit_status: ExitStatus) {
+        if let Some(on_exit) = self.on_exit.take() {
+            on_exit(exit_status);
+        }
     }
 }
 
@@ -183,14 +202,25 @@ fn default_shell_command(shell: &str, user: &str) -> Command {
 }
 
 /// Create a new TTY and return a handle to interact with it.
-pub fn new(config: &Options, window_size: WindowSize, window_id: u64) -> Result<Pty> {
+pub fn new(
+    config: &Options,
+    window_size: WindowSize,
+    window_id: u64,
+    on_exit: impl 'static + FnOnce(ExitStatus) + Send,
+) -> Result<Pty> {
     let pty = openpty(None, Some(&window_size.to_winsize()))?;
     let (master, slave) = (pty.controller, pty.user);
-    from_fd(config, window_id, master, slave)
+    from_fd(config, window_id, master, slave, on_exit)
 }
 
 /// Create a new TTY from a PTY's file descriptors.
-pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd) -> Result<Pty> {
+pub fn from_fd(
+    config: &Options,
+    window_id: u64,
+    master: OwnedFd,
+    slave: OwnedFd,
+    on_exit: impl 'static + FnOnce(ExitStatus) + Send,
+) -> Result<Pty> {
     let master_fd = master.as_raw_fd();
     let slave_fd = slave.as_raw_fd();
 
@@ -280,7 +310,13 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
                 set_nonblocking(master_fd);
             }
 
-            Ok(Pty { child, file: File::from(master), signals, sig_id })
+            Ok(Pty {
+                child,
+                file: File::from(master),
+                signals,
+                sig_id,
+                on_exit: Some(Box::new(on_exit)),
+            })
         },
         Err(err) => Err(Error::new(
             err.kind(),
@@ -303,7 +339,14 @@ impl Drop for Pty {
         // Clear signal-hook handler.
         unregister_signal(self.sig_id);
 
-        let _ = self.child.wait();
+        match self.child.wait() {
+            Ok(exit_status) => {
+                self.call_on_exit_handler_once(exit_status.into());
+            },
+            Err(e) => {
+                warn!("child wait failed after killing it: {:?}", e);
+            },
+        }
     }
 }
 
@@ -385,7 +428,10 @@ impl EventedPty for Pty {
                 None
             },
             Ok(None) => None,
-            Ok(exit_status) => Some(ChildEvent::Exited(exit_status.and_then(|s| s.code()))),
+            Ok(Some(status)) => {
+                self.call_on_exit_handler_once(status.into());
+                Some(ChildEvent::Exited(status.code()))
+            },
         }
     }
 }

@@ -17,6 +17,14 @@ pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
 
+/// Exit status of the child process, that alacritty runs (e.g., the shell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitStatus {
+    Code(i32),
+    Signal(i32),
+    Other,
+}
+
 /// Configuration for the `Pty` interface.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Options {

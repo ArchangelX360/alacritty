@@ -8,13 +8,13 @@ use std::sync::{mpsc, Arc, Mutex};
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 use polling::{Event, Poller};
 
-use windows_sys::Win32::Foundation::{BOOLEAN, FALSE, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, BOOLEAN, FALSE, HANDLE};
 use windows_sys::Win32::System::Threading::{
     GetExitCodeProcess, GetProcessId, RegisterWaitForSingleObject, UnregisterWait, INFINITE,
     WT_EXECUTEINWAITTHREAD, WT_EXECUTEONLYONCE,
 };
 
-use crate::tty::ChildEvent;
+use crate::tty::{ChildEvent, ExitStatus};
 
 struct Interest {
     poller: Arc<Poller>,
@@ -22,9 +22,11 @@ struct Interest {
 }
 
 struct ChildExitSender {
+    child_handle: HANDLE,
     sender: mpsc::Sender<ChildEvent>,
     interest: Arc<Mutex<Option<Interest>>>,
     child_handle: AtomicPtr<c_void>,
+    on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>,
 }
 
 /// WinAPI callback to run when child process exits.
@@ -41,6 +43,10 @@ extern "system" fn child_exit_callback(ctx: *mut c_void, timed_out: BOOLEAN) {
     let exit_code = if status == FALSE { None } else { Some(exit_code as i32) };
     event_tx.sender.send(ChildEvent::Exited(exit_code)).ok();
 
+    if let Some(on_exit) = event_tx.on_exit.lock().unwrap().take() {
+        on_exit(exit_code.map_or(ExitStatus::Other, ExitStatus::Code));
+    }
+
     let interest = event_tx.interest.lock().unwrap();
     if let Some(interest) = interest.as_ref() {
         interest.poller.post(CompletionPacket::new(interest.event)).ok();
@@ -56,7 +62,7 @@ pub struct ChildExitWatcher {
 }
 
 impl ChildExitWatcher {
-    pub fn new(child_handle: HANDLE) -> Result<ChildExitWatcher, Error> {
+    pub fn new(child_handle: HANDLE, on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>) -> Result<ChildExitWatcher, Error> {
         let (event_tx, event_rx) = mpsc::channel();
 
         let mut wait_handle: HANDLE = ptr::null_mut();
@@ -65,6 +71,7 @@ impl ChildExitWatcher {
             sender: event_tx,
             interest: interest.clone(),
             child_handle: AtomicPtr::from(child_handle),
+            on_exit,
         });
 
         let success = unsafe {
@@ -72,7 +79,7 @@ impl ChildExitWatcher {
                 &mut wait_handle,
                 child_handle,
                 Some(child_exit_callback),
-                Box::into_raw(sender_ref).cast(),
+                Box::into_raw(context_ref).cast(),
                 INFINITE,
                 WT_EXECUTEINWAITTHREAD | WT_EXECUTEONLYONCE,
             )
@@ -147,7 +154,8 @@ mod tests {
         let poller = Arc::new(Poller::new().unwrap());
 
         let mut child = Command::new("cmd.exe").spawn().unwrap();
-        let child_exit_watcher = ChildExitWatcher::new(child.as_raw_handle() as HANDLE).unwrap();
+        let on_exit = Arc::new(Mutex::new(Some(Box::new(|_| {}) as _)));
+        let child_exit_watcher = ChildExitWatcher::new(child.as_raw_handle() as HANDLE, on_exit).unwrap();
         child_exit_watcher.register(&poller, Event::readable(PTY_CHILD_EVENT_TOKEN));
 
         child.kill().unwrap();

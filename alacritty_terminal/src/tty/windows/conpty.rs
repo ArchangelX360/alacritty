@@ -5,6 +5,7 @@ use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::IntoRawHandle;
 use std::{mem, ptr};
+use std::sync::{Arc, Mutex};
 
 use windows_sys::core::{HRESULT, PWSTR};
 use windows_sys::Win32::Foundation::{HANDLE, S_OK};
@@ -15,15 +16,17 @@ use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::{s, w};
 
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, InitializeProcThreadAttributeList, UpdateProcThreadAttribute,
-    CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
+    UpdateProcThreadAttribute, CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT,
+    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+    STARTUPINFOW,
 };
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::windows::blocking::{UnblockedReader, UnblockedWriter};
 use crate::tty::windows::child::ChildExitWatcher;
 use crate::tty::windows::{cmdline, win32_string, Pty};
+use crate::tty::ExitStatus;
 use crate::tty::Options;
 
 const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
@@ -107,7 +110,11 @@ impl Drop for Conpty {
 // The ConPTY handle can be sent between threads.
 unsafe impl Send for Conpty {}
 
-pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
+pub fn new(
+    config: &Options,
+    window_size: WindowSize,
+    on_exit: impl 'static + FnOnce(ExitStatus) + Send,
+) -> Result<Pty> {
     let api = ConptyApi::new();
     let mut pty_handle: HPCON = 0;
 
@@ -229,6 +236,8 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
             &mut proc_info as *mut PROCESS_INFORMATION,
         ) > 0;
 
+        DeleteProcThreadAttributeList(startup_info_ex.lpAttributeList);
+
         if !success {
             return Err(Error::last_os_error());
         }
@@ -237,10 +246,11 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
     let conout = UnblockedReader::new(conout, PIPE_CAPACITY);
 
-    let child_watcher = ChildExitWatcher::new(proc_info.hProcess)?;
+    let on_exit = Arc::new(Mutex::new(Some(Box::new(on_exit) as _)));
+    let child_watcher = ChildExitWatcher::new(proc_info.hProcess, Arc::clone(&on_exit))?;
     let conpty = Conpty { handle: pty_handle as HPCON, api };
 
-    Ok(Pty::new(conpty, conout, conin, child_watcher, proc_info.dwProcessId))
+    Ok(Pty::new(conpty, conout, conin, child_watcher, proc_info.dwProcessId, on_exit))
 }
 
 // Windows environment variables are case-insensitive, and the caller is responsible for
