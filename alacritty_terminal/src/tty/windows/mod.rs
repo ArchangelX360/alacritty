@@ -135,7 +135,7 @@ impl EventedPty for Pty {
             Ok(ev) => Some(ev),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
-                if let Some(on_exit) = self.on_exit.lock().take() {
+                if let Some(on_exit) = self.on_exit.lock().unwrap().take() {
                     on_exit(ExitStatus::Other)
                 }
                 Some(ChildEvent::Exited(None))
@@ -154,14 +154,86 @@ fn cmdline(config: &Options) -> String {
     let default_shell = Shell::new("powershell".to_owned(), Vec::new());
     let shell = config.shell.as_ref().unwrap_or(&default_shell);
 
-    once(shell.program.as_str())
-        .chain(shell.args.iter().map(|s| s.as_str()))
-        .collect::<Vec<_>>()
-        .join(" ")
+    encode_command_line(shell.program.as_str(), shell.args.as_slice())
 }
 
 /// Converts the string slice into a Windows-standard representation for "W"-
 /// suffixed function variants, which accept UTF-16 encoded string values.
 pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(once(0)).collect()
+}
+
+pub fn encode_command_line(program: &str, arguments: &[String]) -> String {
+    // Always quote the program name.
+    let commandline = format!("\"{}\"", program);
+
+    if arguments.is_empty() {
+        commandline
+    } else {
+        format!(
+            "{} {}",
+            commandline,
+            arguments.iter().flat_map(quote_arg).collect::<Vec<_>>().join(" ")
+        )
+    }
+}
+
+/// Quotes a command line argument.
+///
+/// See: https://docs.microsoft.com/en-gb/archive/blogs/twistylittlepassagesallalike/everyone-quotes-command-line-arguments-the-wrong-way
+pub fn quote_arg(arg: impl AsRef<str>) -> Option<String> {
+    let arg = arg.as_ref();
+    if arg.is_empty() {
+        return None;
+    }
+
+    let need_quotation = &[' ', '\t', '\n', '"'];
+    if !arg.chars().any(|ch| need_quotation.contains(&ch)) {
+        return Some(arg.to_owned());
+    }
+
+    let mut buf = String::new();
+    buf.push_str("\"");
+    let mut it = arg.chars().peekable();
+    loop {
+        let mut num_backslashes = 0;
+        while let Some(ch) = it.peek() {
+            if *ch == '\\' {
+                it.next();
+                num_backslashes += 1;
+            } else {
+                break;
+            }
+        }
+
+        match it.next() {
+            None => {
+                while num_backslashes > 0 {
+                    buf.push_str(r"\\");
+                    num_backslashes -= 1;
+                }
+                break;
+            },
+            Some(c) => {
+                if c == '"' {
+                    while num_backslashes > 0 {
+                        buf.push_str(r"\\");
+                        num_backslashes -= 1;
+                    }
+                    buf.push_str(r"\");
+                    buf.push_str("\"");
+                } else {
+                    while num_backslashes > 0 {
+                        buf.push_str(r"\");
+                        num_backslashes -= 1;
+                    }
+                    buf.push(c);
+                }
+            },
+        }
+    }
+
+    buf.push('"');
+
+    Some(buf)
 }
