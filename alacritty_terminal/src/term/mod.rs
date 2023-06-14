@@ -1,6 +1,7 @@
 //! Exports the `Term` type which is a high-level API for the Grid.
 
 use std::ops::{Index, IndexMut, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, mem, ptr, slice, str};
@@ -276,6 +277,10 @@ pub struct ExecutionInfo {
 }
 
 pub enum ExecutionEvent {
+    Initialized {
+        /// Path to history file for current shell
+        history_file: PathBuf,
+    },
     ExecutionStarted {
         /// Prefix of execution unit text before output: prompt + command
         prefix: String,
@@ -1140,6 +1145,10 @@ impl<T: EventListener> Handler for Term<T> {
     fn custom_command(&mut self, command: CustomOSCCommand) {
         trace!("Custom OSC command {:?}", command);
         match command {
+            CustomOSCCommand::ShellInitialized { history_file } => {
+                let history_file = PathBuf::from(history_file);
+                self.execution_events.push(ExecutionEvent::Initialized { history_file });
+            },
             CustomOSCCommand::ShellCommandStarted { command } => {
                 // TODO: All this prefix calculation stuff doesnt work:
                 //   * It ignores text wrapping
