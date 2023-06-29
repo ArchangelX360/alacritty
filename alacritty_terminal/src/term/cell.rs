@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::grid::{self, GridCell};
 use crate::index::Column;
-use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor};
+use crate::vte::ansi::{Color, Hyperlink as VteHyperlink, NamedColor, ShellMarker as VteShellMarker};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,6 +117,51 @@ impl ResetDiscriminant<Color> for Cell {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum ShellMarker {
+    PROMPT,
+    COMMAND,
+    RPROMPT,
+    OUTPUT,
+}
+
+impl ShellMarker {
+    /// Command and output markers applies to **cell** and resistant to movement and some removal operations
+    /// Prompt markers applies to **char** and removes/moves with this char
+    #[inline]
+    pub fn is_cell_marker(&self) -> bool {
+        match self {
+            ShellMarker::PROMPT => false,
+            ShellMarker::COMMAND => true,
+            ShellMarker::RPROMPT => false,
+            ShellMarker::OUTPUT => true,
+        }
+    }
+}
+
+impl From<VteShellMarker> for ShellMarker {
+    fn from(value: VteShellMarker) -> Self {
+        match value {
+            VteShellMarker::PROMPT => ShellMarker::PROMPT,
+            VteShellMarker::COMMAND => ShellMarker::COMMAND,
+            VteShellMarker::RPROMPT => ShellMarker::RPROMPT,
+            VteShellMarker::OUTPUT => ShellMarker::OUTPUT,
+        }
+    }
+}
+
+impl From<ShellMarker> for VteShellMarker {
+    fn from(val: ShellMarker) -> Self {
+        match val {
+            ShellMarker::PROMPT => VteShellMarker::PROMPT,
+            ShellMarker::COMMAND => VteShellMarker::COMMAND,
+            ShellMarker::RPROMPT => VteShellMarker::RPROMPT,
+            ShellMarker::OUTPUT => VteShellMarker::OUTPUT,
+        }
+    }
+}
+
 /// Dynamically allocated cell content.
 ///
 /// This storage is reserved for cell attributes which are rarely set. This allows reducing the
@@ -128,6 +173,8 @@ pub struct CellExtra {
     zerowidth: Vec<char>,
     underline_color: Option<Color>,
     hyperlink: Option<Hyperlink>,
+
+    shell_marker: Option<ShellMarker>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -185,7 +232,9 @@ impl Cell {
             && self
                 .extra
                 .as_ref()
-                .map_or(true, |extra| extra.zerowidth.is_empty() && extra.hyperlink.is_none())
+                .map_or(true, |extra| {
+                    extra.zerowidth.is_empty() && extra.hyperlink.is_none() && extra.shell_marker.is_none()
+                })
         {
             self.extra = None;
         } else {
@@ -204,7 +253,7 @@ impl Cell {
     pub fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         let should_drop = hyperlink.is_none()
             && self.extra.as_ref().map_or(true, |extra| {
-                extra.zerowidth.is_empty() && extra.underline_color.is_none()
+                extra.zerowidth.is_empty() && extra.underline_color.is_none() && extra.shell_marker.is_none()
             });
 
         if should_drop {
@@ -219,6 +268,25 @@ impl Cell {
     #[inline]
     pub fn hyperlink(&self) -> Option<Hyperlink> {
         self.extra.as_ref()?.hyperlink.clone()
+    }
+
+    #[inline]
+    pub fn shell_marker(&self) -> Option<ShellMarker> {
+        self.extra.as_ref()?.shell_marker
+    }
+
+    pub fn set_shell_marker(&mut self, shell_marker: Option<ShellMarker>) {
+        let should_drop = shell_marker.is_none()
+            && self.extra.as_ref().map_or(true, |extra| {
+                extra.zerowidth.is_empty() && extra.underline_color.is_none() && extra.hyperlink.is_none()
+            });
+
+        if should_drop {
+            self.extra = None;
+        } else {
+            let extra = self.extra.get_or_insert(Default::default());
+            Arc::make_mut(extra).shell_marker = shell_marker;
+        }
     }
 }
 
@@ -252,6 +320,14 @@ impl GridCell for Cell {
     #[inline]
     fn reset(&mut self, template: &Self) {
         *self = Cell { bg: template.bg, ..Cell::default() };
+    }
+
+    fn shell_marker(&self) -> Option<ShellMarker> {
+        self.shell_marker()
+    }
+
+    fn set_shell_marker(&mut self, shell_marker: Option<ShellMarker>) {
+        self.set_shell_marker(shell_marker);
     }
 }
 

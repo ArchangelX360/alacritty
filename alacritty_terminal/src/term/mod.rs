@@ -21,8 +21,9 @@ use crate::event::{Event, EventListener, VoidListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
-use crate::term::cell::{Cell, Flags, LineLength};
+use crate::term::cell::{Cell, CellExtra, Flags, LineLength, ShellMarker};
 use crate::term::color::Colors;
+use crate::tty::Shell;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, CustomOSCCommand, Handler, Hyperlink,
@@ -372,6 +373,11 @@ pub struct Term<T> {
     ///
     /// **Custom OSC sequences required**
     pub execution_events: Vec<ExecutionEvent>,
+
+    /// Marker that should be applied to next input char
+    ///
+    /// **Custom OSC sequences required**
+    pub next_char_marker: Option<ShellMarker>,
 }
 
 /// Configuration options for the [`Term`].
@@ -490,6 +496,7 @@ impl<T> Term<T> {
             skip_grid_commands: false,
             command_start_timestamp: Some(Instant::now()),
             execution_events: vec![],
+            next_char_marker: None,
         }
     }
 
@@ -1042,6 +1049,10 @@ impl<T> Term<T> {
         self.grid.cursor.point.column = Column(0);
         self.grid.cursor.input_needs_wrap = false;
         self.damage_cursor();
+        if self.grid.cursor.marker_on_wrap.is_some() {
+            let marker = self.grid.cursor.marker_on_wrap.take();
+            self.grid.cursor_cell().set_shell_marker(marker);
+        }
     }
 
     /// Write `c` to the cell at the cursor position.
@@ -1050,8 +1061,20 @@ impl<T> Term<T> {
         let c = self.grid.cursor.charsets[self.active_charset].map(c);
         let fg = self.grid.cursor.template.fg;
         let bg = self.grid.cursor.template.bg;
-        let flags = self.grid.cursor.template.flags;
-        let extra = self.grid.cursor.template.extra.clone();
+        let flags = self.grid.cursor.template.flags - Flags::UNINIT;
+
+        // If template marker is None and current marker is cell marker - preserve current marker
+        let template_marker = self.grid.cursor.template.shell_marker();
+        let current_marker = self.grid.cursor_cell().shell_marker();
+        let extra: Option<Arc<CellExtra>>;
+        if template_marker.is_none() && current_marker.map(|x| x.is_cell_marker()).unwrap_or(false)
+        {
+            self.grid.cursor.template.set_shell_marker(current_marker);
+            extra = self.grid.cursor.template.extra.clone();
+            self.grid.cursor.template.set_shell_marker(None);
+        } else {
+            extra = self.grid.cursor.template.extra.clone();
+        }
 
         let mut cursor_cell = self.grid.cursor_cell();
 
@@ -1136,6 +1159,18 @@ impl<T: EventListener> Handler for Term<T> {
     fn custom_command(&mut self, command: CustomOSCCommand) {
         trace!("Custom OSC command {:?}", command);
         match command {
+            CustomOSCCommand::MarkCell { marker } => {
+                let marker: ShellMarker = marker.into();
+                if marker.is_cell_marker() {
+                    if self.grid.cursor.input_needs_wrap {
+                        self.grid.cursor.marker_on_wrap = Some(marker);
+                    } else {
+                        self.grid.cursor_cell().set_shell_marker(Some(marker));
+                    }
+                } else {
+                    self.next_char_marker = Some(marker)
+                }
+            },
             CustomOSCCommand::ShellInitialized { history_file } => {
                 let history_file = PathBuf::from(history_file);
                 self.execution_events.push(ExecutionEvent::Initialized { history_file });
@@ -1222,8 +1257,15 @@ impl<T: EventListener> Handler for Term<T> {
             }
         }
 
+        let marker = self.next_char_marker.take();
         if width == 1 {
+            if marker.is_some() {
+                self.grid.cursor.template.set_shell_marker(marker);
+            }
             self.write_at_cursor(c);
+            if marker.is_some() {
+                self.grid.cursor.template.set_shell_marker(None);
+            }
         } else {
             if self.grid.cursor.point.column + 1 >= columns {
                 if self.mode.contains(TermMode::LINE_WRAP) {
@@ -1240,9 +1282,15 @@ impl<T: EventListener> Handler for Term<T> {
             }
 
             // Write full width glyph to current cursor cell.
+            if marker.is_some() {
+                self.grid.cursor.template.set_shell_marker(marker);
+            }
             self.grid.cursor.template.flags.insert(Flags::WIDE_CHAR);
             self.write_at_cursor(c);
             self.grid.cursor.template.flags.remove(Flags::WIDE_CHAR);
+            if marker.is_some() {
+                self.grid.cursor.template.set_shell_marker(None);
+            }
 
             // Write spacer to cell following the wide glyph.
             self.grid.cursor.point.column += 1;
@@ -1333,13 +1381,37 @@ impl<T: EventListener> Handler for Term<T> {
         let row = &mut self.grid[line][..];
 
         for offset in (0..num_cells).rev() {
+            // | - | - | s | - | - | d | - | - |
+            //           ^___________^
+            let source_marker = row[source.0 + offset].shell_marker();
+            if source_marker.map(|x| x.is_cell_marker()).unwrap_or(false) {
+                // If source marker is cell marker we no need to move marker with char
+                row[destination + offset].set_shell_marker(source_marker);
+
+                // If destination marker is cell marker we should preserve it in cell
+                let destination_marker = row[destination + offset].shell_marker();
+                if destination_marker.map(|x| x.is_cell_marker()).unwrap_or(false) {
+                    row[source.0 + offset].set_shell_marker(destination_marker);
+                }
+                else {
+                    row[source.0 + offset].set_shell_marker(None);
+                }
+            } else {
+                // Otherwise - move with char
+                // We assume that char markers preferable than cell markers in such case
+                row[destination + offset].set_shell_marker(None);
+            }
             row.swap(destination + offset, source.0 + offset);
         }
 
         // Cells were just moved out toward the end of the line;
         // fill in between source and dest with blanks.
         for cell in &mut row[source.0..destination] {
+            let marker = cell.shell_marker();
             *cell = bg.into();
+            if marker.is_some() {
+                cell.set_shell_marker(marker)
+            }
         }
     }
 
@@ -1522,6 +1594,9 @@ impl<T: EventListener> Handler for Term<T> {
             if cell.c == ' ' {
                 cell.c = c;
             }
+            if self.next_char_marker.is_some() {
+                cell.set_shell_marker(self.next_char_marker.take());
+            }
 
             loop {
                 if (self.grid.cursor.point.column + 1) == self.columns() {
@@ -1696,7 +1771,11 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage.damage_line(line.0 as usize, start.0, end.0);
         let row = &mut self.grid[line];
         for cell in &mut row[start..end] {
+            let marker = cell.shell_marker().filter(|x| x.is_cell_marker());
             *cell = bg.into();
+            if marker.is_some() {
+                cell.set_shell_marker(marker)
+            }
         }
     }
 
@@ -1730,7 +1809,11 @@ impl<T: EventListener> Handler for Term<T> {
         // 1 cell.
         let end = columns - count;
         for cell in &mut row[end..] {
+            let marker = cell.shell_marker().filter(|x| x.is_cell_marker());
             *cell = bg.into();
+            if marker.is_some() {
+                cell.set_shell_marker(marker)
+            }
         }
     }
 
@@ -1827,7 +1910,11 @@ impl<T: EventListener> Handler for Term<T> {
 
         let row = &mut self.grid[point.line];
         for cell in &mut row[left..right] {
+            let marker = cell.shell_marker().filter(|x| x.is_cell_marker());
             *cell = bg.into();
+            if marker.is_some() {
+                cell.set_shell_marker(marker)
+            }
         }
 
         let range = self.grid.cursor.point.line..=self.grid.cursor.point.line;
@@ -1947,7 +2034,11 @@ impl<T: EventListener> Handler for Term<T> {
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
                 for cell in &mut self.grid[cursor.line][..end] {
+                    let marker = cell.shell_marker().filter(|x| x.is_cell_marker());
                     *cell = bg.into();
+                    if marker.is_some() {
+                        cell.set_shell_marker(marker)
+                    }
                 }
 
                 let range = Line(0)..=cursor.line;
@@ -1956,7 +2047,11 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::ClearMode::Below => {
                 let cursor = self.grid.cursor.point;
                 for cell in &mut self.grid[cursor.line][cursor.column..] {
+                    let marker = cell.shell_marker().filter(|x| x.is_cell_marker());
                     *cell = bg.into();
+                    if marker.is_some() {
+                        cell.set_shell_marker(marker)
+                    }
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {

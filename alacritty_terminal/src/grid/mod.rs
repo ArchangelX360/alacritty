@@ -7,7 +7,7 @@ use std::ops::{Bound, Deref, Index, IndexMut, Range, RangeBounds};
 use serde::{Deserialize, Serialize};
 
 use crate::index::{Column, Line, Point};
-use crate::term::cell::{Flags, ResetDiscriminant};
+use crate::term::cell::{Flags, ResetDiscriminant, ShellMarker};
 use crate::vte::ansi::{CharsetIndex, StandardCharset};
 
 pub mod resize;
@@ -28,6 +28,9 @@ pub trait GridCell: Sized {
 
     fn flags(&self) -> &Flags;
     fn flags_mut(&mut self) -> &mut Flags;
+
+    fn shell_marker(&self) -> Option<ShellMarker>;
+    fn set_shell_marker(&mut self, shell_marker: Option<ShellMarker>);
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -50,6 +53,9 @@ pub struct Cursor<T> {
     /// the number of columns, which would lead to index out of bounds when interacting with arrays
     /// without sanitization.
     pub input_needs_wrap: bool,
+
+    /// Marker that should be placed in cell after wrapping
+    pub marker_on_wrap: Option<ShellMarker>,
 }
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]

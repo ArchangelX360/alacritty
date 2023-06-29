@@ -109,6 +109,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         let mut reversed: Vec<Row<T>> = Vec::with_capacity(self.raw.len());
         let mut cursor_line_delta = 0;
+        let input_wrap_needed = self.cursor.input_needs_wrap;
 
         // Remove the linewrap special case, by moving the cursor outside of the grid.
         if self.cursor.input_needs_wrap && reflow {
@@ -239,11 +240,16 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         // Clamp display offset in case lines above it got merged.
         self.display_offset = min(self.display_offset, self.history_size());
+        if input_wrap_needed && !self.cursor.input_needs_wrap {
+            let marker = self.cursor.marker_on_wrap.take();
+            self.cursor_cell().set_shell_marker(marker);
+        }
     }
 
     /// Shrink number of columns in each row, reflowing if necessary.
     fn shrink_columns(&mut self, reflow: bool, columns: usize) {
         self.columns = columns;
+        let input_wrap_needed = self.cursor.input_needs_wrap;
 
         // Remove the linewrap special case, by moving the cursor outside of the grid.
         if self.cursor.input_needs_wrap && reflow {
@@ -385,5 +391,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         // Clamp the saved cursor to the grid.
         self.saved_cursor.point.column = min(self.saved_cursor.point.column, Column(columns - 1));
+        if input_wrap_needed && !self.cursor.input_needs_wrap {
+            let marker = self.cursor.marker_on_wrap.take();
+            self.cursor_cell().set_shell_marker(marker);
+        }
     }
 }

@@ -20,6 +20,14 @@ impl GridCell for usize {
     fn flags_mut(&mut self) -> &mut Flags {
         unimplemented!();
     }
+
+    fn shell_marker(&self) -> Option<ShellMarker> {
+        unimplemented!();
+    }
+
+    fn set_shell_marker(&mut self, _shell_marker: Option<ShellMarker>) {
+        unimplemented!();
+    }
 }
 
 // Scroll up moves lines upward.

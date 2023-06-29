@@ -273,7 +273,7 @@ mod tests {
     use crate::grid::storage::{Storage, MAX_CACHE_SIZE};
     use crate::grid::GridCell;
     use crate::index::{Column, Line};
-    use crate::term::cell::Flags;
+    use crate::term::cell::{Flags, ShellMarker};
 
     impl GridCell for char {
         fn is_empty(&self) -> bool {
@@ -289,6 +289,14 @@ mod tests {
         }
 
         fn flags_mut(&mut self) -> &mut Flags {
+            unimplemented!();
+        }
+
+        fn shell_marker(&self) -> Option<ShellMarker> {
+            unimplemented!();
+        }
+
+        fn set_shell_marker(&mut self, _shell_marker: Option<ShellMarker>) {
             unimplemented!();
         }
     }
