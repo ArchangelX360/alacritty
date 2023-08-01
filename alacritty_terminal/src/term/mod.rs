@@ -282,8 +282,6 @@ pub enum ExecutionEvent {
         history_file: PathBuf,
     },
     ExecutionStarted {
-        /// Prefix of execution unit text before output: prompt + command
-        prefix: String,
         /// Shell command that has been executed
         command: String,
     },
@@ -370,11 +368,6 @@ pub struct Term<T> {
     ///
     /// **Custom OSC sequences required**
     command_start_timestamp: Option<Instant>,
-
-    /// Point of begin of last known prompt
-    ///
-    /// **Custom OSC sequences required**
-    prompt_point: Point,
 
     /// Ordered history with information about command execution result
     ///
@@ -497,7 +490,6 @@ impl<T> Term<T> {
 
             skip_grid_commands: false,
             command_start_timestamp: Some(Instant::now()),
-            prompt_point: Point::default(),
             execution_events: vec![],
         }
     }
@@ -1150,30 +1142,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.execution_events.push(ExecutionEvent::Initialized { history_file });
             },
             CustomOSCCommand::ShellCommandStarted { command } => {
-                // TODO: All this prefix calculation stuff doesnt work:
-                //   * It ignores text wrapping
-                //   * It (mostly) ignores cursor movement
-                //   * I'm not sure that we need it, but we cant calculate prompt for bash < 4.4
-                //     (for now)
-                let cur_point = self.grid.cursor.point;
-                let mut iter_start = self.prompt_point;
-                if iter_start.line == self.grid.screen_lines() - 1 {
-                    iter_start.line -= 1;
-                }
-                if iter_start.column == 0 {
-                    iter_start.line -= 1;
-                    iter_start.column = self.grid.last_column();
-                } else {
-                    iter_start.column -= 1;
-                };
-                let prefix = self
-                    .grid
-                    .iter_from(iter_start)
-                    .take_while(|c| c.point != cur_point)
-                    .filter(|c| !c.flags.contains(Flags::UNINIT))
-                    .map(|c| c.c)
-                    .collect::<String>();
-                self.execution_events.push(ExecutionEvent::ExecutionStarted { prefix, command });
+                self.execution_events.push(ExecutionEvent::ExecutionStarted { command });
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
@@ -1198,8 +1167,6 @@ impl<T: EventListener> Handler for Term<T> {
                 }
 
                 let prompt = parse_ansi(&raw_prompt, self);
-
-                self.prompt_point = self.grid.cursor.point;
                 self.execution_events.push(ExecutionEvent::ExecutionFinished {
                     grid,
                     mode,
