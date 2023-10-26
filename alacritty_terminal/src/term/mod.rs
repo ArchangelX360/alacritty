@@ -274,6 +274,7 @@ impl TermDamageState {
 pub struct ExecutionInfo {
     pub exit_code: i32,
     pub elapsed_time: u64,
+    pub working_directory: PathBuf,
 }
 
 pub enum ExecutionEvent {
@@ -1180,7 +1181,8 @@ impl<T: EventListener> Handler for Term<T> {
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
-            CustomOSCCommand::ShellCommandFinished { exit_code, reset_grid } => {
+            CustomOSCCommand::ShellCommandFinished { exit_code, reset_grid, working_directory  } => {
+                let working_directory = PathBuf::from(working_directory);
                 let elapsed_time = self.command_start_timestamp.map_or_else(
                     || {
                         debug!("Command start OSC didn't received");
@@ -1202,7 +1204,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.execution_events.push(ExecutionEvent::ExecutionFinished {
                     grid,
                     mode,
-                    info: ExecutionInfo { exit_code, elapsed_time },
+                    info: ExecutionInfo { exit_code, elapsed_time, working_directory },
                 });
             },
         }
