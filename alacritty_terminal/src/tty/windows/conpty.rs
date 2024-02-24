@@ -4,16 +4,19 @@ use std::ffi::OsStr;
 use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::IntoRawHandle;
-use std::{mem, ptr};
+use std::{iter, mem, ptr};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use windows_sys::core::{HRESULT, PWSTR};
+use windows_sys::core::{HRESULT, PCWSTR, PWSTR};
 use windows_sys::Win32::Foundation::{HANDLE, S_OK};
 use windows_sys::Win32::System::Console::{
     ClosePseudoConsole, CreatePseudoConsole, ResizePseudoConsole, COORD, HPCON,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows_sys::{s, w};
+use windows_sys::s;
 
 use windows_sys::Win32::System::Threading::{
     CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
@@ -52,10 +55,11 @@ struct ConptyApi {
 }
 
 impl ConptyApi {
-    fn new() -> Self {
-        match Self::load_conpty() {
+    fn new(conpty_path: Option<PathBuf>) -> Self {
+        let conpty_path = conpty_path.as_ref().map(|x| x.as_os_str()).unwrap_or(OsStr::new("conpty.dll"));
+        match Self::load_conpty(conpty_path) {
             Some(conpty) => {
-                info!("Using conpty.dll for pseudoconsole");
+                info!("Using {:?} for pseudoconsole", conpty_path);
                 conpty
             },
             None => {
@@ -71,10 +75,12 @@ impl ConptyApi {
     }
 
     /// Try loading ConptyApi from conpty.dll library.
-    fn load_conpty() -> Option<Self> {
+    fn load_conpty(conpty_path: &OsStr) -> Option<Self> {
         type LoadedFn = unsafe extern "system" fn() -> isize;
         unsafe {
-            let hmodule = LoadLibraryW(w!("conpty.dll"));
+            let conpty_path = conpty_path.encode_wide().chain(iter::once(0)).collect::<Box<_>>();
+            let conpty_path = PCWSTR::from(conpty_path.as_ptr());
+            let hmodule = LoadLibraryW(conpty_path);
             if hmodule.is_null() {
                 return None;
             }
@@ -113,9 +119,10 @@ unsafe impl Send for Conpty {}
 pub fn new(
     config: &Options,
     window_size: WindowSize,
+    conpty_path: Option<PathBuf>,
     on_exit: impl 'static + FnOnce(ExitStatus) + Send,
 ) -> Result<Pty> {
-    let api = ConptyApi::new();
+    let api = ConptyApi::new(conpty_path);
     let mut pty_handle: HPCON = 0;
 
     // Passing 0 as the size parameter allows the "system default" buffer

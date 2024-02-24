@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::io::{self, Result};
 use std::iter::once;
 use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 
@@ -39,9 +40,10 @@ pub fn new(
     config: &Options,
     window_size: WindowSize,
     _window_id: u64,
+    conpty_path: Option<PathBuf>,
     on_exit: impl 'static + FnOnce(ExitStatus) + Send,
 ) -> Result<Pty> {
-    conpty::new(config, window_size, on_exit)
+    conpty::new(config, window_size, conpty_path, on_exit)
 }
 
 impl Pty {
