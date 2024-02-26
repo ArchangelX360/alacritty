@@ -201,9 +201,13 @@ fn default_shell_command(shell: &str, user: &str) -> Command {
     login_command
 }
 
+#[derive(Debug, Clone)]
+pub struct TtyContext {}
+
 /// Create a new TTY and return a handle to interact with it.
 pub fn new(
     config: &Options,
+    _context: &TtyContext,
     window_size: WindowSize,
     window_id: u64,
     on_exit: impl 'static + FnOnce(ExitStatus) + Send,

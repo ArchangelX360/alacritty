@@ -36,14 +36,19 @@ pub struct Pty {
     on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TtyContext {
+    pub conpty_path: Option<PathBuf>,
+}
+
 pub fn new(
     config: &Options,
+    context: &TtyContext,
     window_size: WindowSize,
     _window_id: u64,
-    conpty_path: Option<PathBuf>,
     on_exit: impl 'static + FnOnce(ExitStatus) + Send,
 ) -> Result<Pty> {
-    conpty::new(config, window_size, conpty_path, on_exit)
+    conpty::new(config, window_size, context.conpty_path.clone(), on_exit)
 }
 
 impl Pty {
