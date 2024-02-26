@@ -1197,7 +1197,7 @@ impl<T: EventListener> Handler for Term<T> {
 
                 if reset_grid {
                     self.grid_mut().reset();
-                    self.skip_grid_commands = true;
+                    self.skip_grid_commands = false;
                 } else {
                     self.grid_mut().clear_history();
                 }
