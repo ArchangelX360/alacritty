@@ -201,7 +201,7 @@ fn default_shell_command(shell: &str, user: &str) -> Command {
     login_command
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct TtyContext {}
 
 /// Create a new TTY and return a handle to interact with it.

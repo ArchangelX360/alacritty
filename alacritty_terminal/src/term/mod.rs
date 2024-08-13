@@ -14,21 +14,18 @@ use base64::Engine;
 use bitflags::bitflags;
 use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
-use vte::ansi::StdSyncHandler;
-use vte::Parser;
 
-use crate::event::{Event, EventListener, VoidListener};
+use crate::event::{Event, EventListener};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
 use crate::term::cell::{Cell, CellExtra, Flags, LineLength, ShellMarker};
 use crate::term::color::Colors;
-use crate::tty::Shell;
 use crate::vi_mode::{ViModeCursor, ViMotion};
 use crate::vte::ansi::{
     self, Attr, CharsetIndex, Color, CursorShape, CursorStyle, CustomOSCCommand, Handler, Hyperlink,
-    KeyboardModes, KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode, Performer,
-    ProcessorState, PrivateMode, Rgb, StandardCharset,
+    KeyboardModes, KeyboardModesApplyBehavior, NamedColor, NamedMode, NamedPrivateMode,
+    PrivateMode, Rgb, StandardCharset,
 };
 
 pub mod cell;
@@ -1128,17 +1125,6 @@ impl<T> Term<T> {
     }
 }
 
-fn parse_ansi<D: Dimensions>(str: &String, dimensions: &D) -> Grid<Cell> {
-    let mut term = Term::new(Config::default(), dimensions, VoidListener);
-    let mut state = ProcessorState::<StdSyncHandler>::default();
-    let mut performer = Performer::new(&mut state, &mut term);
-    let mut parser = Parser::new();
-    for byte in str.bytes() {
-        parser.advance(&mut performer, byte)
-    }
-    return term.grid;
-}
-
 impl<T> Dimensions for Term<T> {
     #[inline]
     fn columns(&self) -> usize {
@@ -1193,7 +1179,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.command_start_timestamp = None;
 
                 let grid = self.grid.clone();
-                let mode = self.mode.clone();
+                let mode = self.mode;
 
                 if reset_grid {
                     self.grid_mut().reset();

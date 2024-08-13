@@ -36,7 +36,7 @@ pub struct Pty {
     on_exit: Arc<Mutex<Option<Box<dyn FnOnce(ExitStatus) + Send>>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct TtyContext {
     pub conpty_path: Option<PathBuf>,
 }
