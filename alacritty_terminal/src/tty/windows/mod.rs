@@ -200,7 +200,7 @@ pub fn quote_arg(arg: impl AsRef<str>) -> Option<String> {
     }
 
     let mut buf = String::new();
-    buf.push_str("\"");
+    buf.push('"');
     let mut it = arg.chars().peekable();
     loop {
         let mut num_backslashes = 0;
@@ -227,11 +227,11 @@ pub fn quote_arg(arg: impl AsRef<str>) -> Option<String> {
                         buf.push_str(r"\\");
                         num_backslashes -= 1;
                     }
-                    buf.push_str(r"\");
-                    buf.push_str("\"");
+                    buf.push('\\');
+                    buf.push('"');
                 } else {
                     while num_backslashes > 0 {
-                        buf.push_str(r"\");
+                        buf.push('\\');
                         num_backslashes -= 1;
                     }
                     buf.push(c);

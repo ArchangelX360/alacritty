@@ -5,8 +5,6 @@ use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::IntoRawHandle;
 use std::{iter, mem, ptr};
-use std::ffi::OsStr;
-use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
