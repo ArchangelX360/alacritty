@@ -225,6 +225,9 @@ struct TermDamageState {
 
     /// Old terminal cursor point.
     last_cursor: Point,
+
+    /// Line furthest to the top which was damaged.
+    top_damage_line: i32,
 }
 
 impl TermDamageState {
@@ -232,7 +235,7 @@ impl TermDamageState {
         let lines =
             (0..num_lines).map(|line| LineDamageBounds::undamaged(line, num_cols)).collect();
 
-        Self { full: true, lines, last_cursor: Default::default() }
+        Self { full: true, lines, last_cursor: Default::default(), top_damage_line: 0 }
     }
 
     #[inline]
@@ -240,6 +243,7 @@ impl TermDamageState {
         // Reset point, so old cursor won't end up outside of the viewport.
         self.last_cursor = Default::default();
         self.full = true;
+        self.top_damage_line = 0;
 
         self.lines.clear();
         self.lines.reserve(num_lines);
@@ -257,6 +261,7 @@ impl TermDamageState {
     /// Expand `line`'s damage to span at least `left` to `right` column.
     #[inline]
     fn damage_line(&mut self, line: usize, left: usize, right: usize) {
+        self.top_damage_line = cmp::min(self.top_damage_line, line as i32);
         self.lines[line].expand(left, right);
     }
 
@@ -264,6 +269,7 @@ impl TermDamageState {
     fn reset(&mut self, num_cols: usize) {
         self.full = false;
         self.lines.iter_mut().for_each(|line| line.reset(num_cols));
+        self.top_damage_line = self.lines.len() as i32;
     }
 }
 
@@ -537,6 +543,10 @@ impl<T> Term<T> {
         // scrolling) is handled via full damage.
         let display_offset = self.grid().display_offset();
         TermDamage::Partial(TermDamageIterator::new(&self.damage.lines, display_offset))
+    }
+
+    pub fn top_damage_line(&mut self) -> i32 {
+        self.damage.top_damage_line
     }
 
     /// Resets the terminal damage information.
