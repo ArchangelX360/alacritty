@@ -545,7 +545,7 @@ impl<T> Term<T> {
         TermDamage::Partial(TermDamageIterator::new(&self.damage.lines, display_offset))
     }
 
-    pub fn top_damage_line(&mut self) -> i32 {
+    pub fn top_damage_line(&self) -> i32 {
         self.damage.top_damage_line
     }
 
