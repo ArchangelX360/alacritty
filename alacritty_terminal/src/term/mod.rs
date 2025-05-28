@@ -2,6 +2,7 @@
 
 use std::ops::{Index, IndexMut, Range};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, mem, ptr, slice, str};
@@ -382,6 +383,10 @@ pub struct Term<T> {
     ///
     /// **Custom OSC sequences required**
     pub next_char_marker: Option<ShellMarker>,
+
+    /// Flag indicating whether the history was cleared via an ANSI control
+    /// sequence by a program running inside the terminal.
+    pub is_ansi_clear_history: AtomicBool,
 }
 
 /// Configuration options for the [`Term`].
@@ -501,6 +506,8 @@ impl<T> Term<T> {
             command_start_timestamp: Some(Instant::now()),
             execution_events: vec![],
             next_char_marker: None,
+
+            is_ansi_clear_history: AtomicBool::new(false),
         }
     }
 
@@ -2077,6 +2084,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.selection = None;
             },
             ansi::ClearMode::Saved if self.history_size() > 0 => {
+                self.is_ansi_clear_history.swap(true, Ordering::Relaxed);
                 self.grid.clear_history();
 
                 self.vi_mode_cursor.point.line =
@@ -2085,7 +2093,9 @@ impl<T: EventListener> Handler for Term<T> {
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(..Line(0)));
             },
             // We have no history to clear.
-            ansi::ClearMode::Saved => (),
+            ansi::ClearMode::Saved => {
+                self.is_ansi_clear_history.swap(true, Ordering::Relaxed);
+            },
         }
 
         self.mark_fully_damaged();
