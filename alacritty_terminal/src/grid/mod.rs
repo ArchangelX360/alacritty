@@ -185,7 +185,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
     }
 
-    fn decrease_scroll_limit(&mut self, count: usize) {
+    pub fn decrease_scroll_limit(&mut self, count: usize) {
         let count = min(count, self.history_size());
         if count != 0 {
             self.raw.shrink_lines(min(count, self.history_size()));

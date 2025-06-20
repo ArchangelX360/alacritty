@@ -736,6 +736,7 @@ impl<T> Term<T> {
         }
 
         debug!("New num_cols is {} and num_lines is {}", num_cols, num_lines);
+        let history_size_before_resize = self.history_size();
 
         // Move vi mode cursor with the content.
         let history_size = self.history_size();
@@ -773,6 +774,52 @@ impl<T> Term<T> {
 
         // Resize damage information.
         self.damage.resize(num_cols, num_lines);
+
+        #[cfg(windows)]
+        self.adjust_to_conpty_resize_behavior(history_size_before_resize);
+    }
+
+    /// Powershell / conpty has a different resize behavior than Alacritty if line wraps occur
+    /// during resize:
+    /// - Alacritty keeps all blank lines in the bottom of the screen and any new line introduced
+    ///   due to line wrapping is appended to the history section (consistent with iterm behavior).
+    /// - Conpty first consumes blank lines in the bottom of the screen and only appends to the
+    ///   history if no more space is left in the bottom of the screen.
+    /// In order to keep Alacritty and conpty in sync after resize we need to adjust the Alacritty
+    /// state correspondingly. Otherwise bad things can happen because there is no additional state
+    /// sync happening between conpty and Alacritty.
+    fn adjust_to_conpty_resize_behavior(&mut self, history_size_before_resize: usize) {
+        let history_size_change = (self.history_size() as i32) - (history_size_before_resize as i32);
+
+        if history_size_change > 0 {
+            // determine number of lines we can scroll down (i.e. number of blank lines available)
+            let mut scroll_lines = 0;
+            while scroll_lines < history_size_change {
+                let line = self.bottommost_line() - Line(scroll_lines);
+                let line_text = self.line_to_string(line, Column(0)..self.last_column(), true);
+                if line_text.trim().is_empty() {
+                    scroll_lines += 1;
+                } else {
+                    break;
+                }
+            }
+            if scroll_lines > 0 {
+                self.scroll_down_relative(self.topmost_line(), scroll_lines as usize);
+                self.grid.cursor.point.line += scroll_lines;
+                self.grid.saved_cursor.point.line += scroll_lines;
+                // scroll down introduces blank lines at the top of the history - remove them
+                self.grid.decrease_scroll_limit(scroll_lines as usize);
+            }
+
+        } else if history_size_change < 0 {
+            let scroll_lines = -history_size_change;
+            // scroll up introduces blank lines at the bottom of the screen (similar to scroll down)
+            // however these can stay
+            self.scroll_up_relative(Line(0), scroll_lines as usize);
+            self.grid.cursor.point.line -= scroll_lines;
+            self.grid.saved_cursor.point.line -= scroll_lines;
+        }
+        self.mark_fully_damaged();
     }
 
     /// Active terminal modes.
