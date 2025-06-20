@@ -32,6 +32,8 @@ use crate::vte::ansi::{
 pub mod cell;
 pub mod color;
 pub mod search;
+
+#[cfg(windows)]
 mod windows;
 
 /// Minimum number of columns.
