@@ -1073,6 +1073,10 @@ impl<T> Term<T> {
         self.damage_cursor();
         if self.grid.cursor.marker_on_wrap.is_some() {
             let marker = self.grid.cursor.marker_on_wrap.take();
+            if marker.is_some_and(|x| x == ShellMarker::COMMAND) {
+                // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
+                self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+            }
             self.grid.cursor_cell().set_shell_marker(marker);
         }
     }
@@ -1088,6 +1092,11 @@ impl<T> Term<T> {
         // If template marker is None and current marker is cell marker - preserve current marker
         let template_marker = self.grid.cursor.template.shell_marker();
         let current_marker = self.grid.cursor_cell().shell_marker();
+        if template_marker.is_some_and(|x| x == ShellMarker::COMMAND) {
+            // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
+            self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+        }
+
         let extra: Option<Arc<CellExtra>>;
         if template_marker.is_none() && current_marker.map(|x| x.is_cell_marker()).unwrap_or(false)
         {
@@ -1125,6 +1134,33 @@ impl<T> Term<T> {
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
         cursor_cell.extra = extra;
+    }
+
+    /// Clears all occurrences of the given [`marker`] in the same line as [`pos`].
+    /// Scanning for marker occurrences starts at the specified position and stops if
+    /// - the end of the line is reached, or
+    /// - a different marker type is found
+    fn clear_markers_in_line(&mut self, pos: Point, marker: ShellMarker) {
+        for col in (0..pos.column.0).rev() {
+            let col = Column(col);
+            if let Some(existing) = self.grid[pos.line][col].shell_marker() {
+                if existing == marker {
+                    self.grid[pos.line][col].set_shell_marker(Option::None);
+                } else {
+                    break;
+                }
+            }
+        }
+        for col in pos.column.0..self.grid.columns() {
+            let col = Column(col);
+            if let Some(existing) = self.grid[pos.line][col].shell_marker() {
+                if existing == marker {
+                    self.grid[pos.line][col].set_shell_marker(Option::None);
+                } else {
+                    break;
+                }
+            }
+        }
     }
 
     #[inline]
@@ -1176,6 +1212,10 @@ impl<T: EventListener> Handler for Term<T> {
                     if self.grid.cursor.input_needs_wrap {
                         self.grid.cursor.marker_on_wrap = Some(marker);
                     } else {
+                        if marker == ShellMarker::COMMAND {
+                            // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
+                            self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+                        }
                         self.grid.cursor_cell().set_shell_marker(Some(marker));
                     }
                 } else {
