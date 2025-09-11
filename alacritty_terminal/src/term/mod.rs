@@ -1075,7 +1075,7 @@ impl<T> Term<T> {
             let marker = self.grid.cursor.marker_on_wrap.take();
             if marker.is_some_and(|x| x == ShellMarker::COMMAND) {
                 // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-                self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+                self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
             }
             self.grid.cursor_cell().set_shell_marker(marker);
         }
@@ -1094,7 +1094,7 @@ impl<T> Term<T> {
         let current_marker = self.grid.cursor_cell().shell_marker();
         if template_marker.is_some_and(|x| x == ShellMarker::COMMAND) {
             // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-            self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+            self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
         }
 
         let extra: Option<Arc<CellExtra>>;
@@ -1136,29 +1136,58 @@ impl<T> Term<T> {
         cursor_cell.extra = extra;
     }
 
-    /// Clears all occurrences of the given [`marker`] in the same line as [`pos`].
+    /// Clears all occurrences of the given [`marker`] in the same text line as [`pos`].
     /// Scanning for marker occurrences starts at the specified position and stops if
-    /// - the end of the line is reached, or
+    /// - the end (or start) of the text line is reached, or
     /// - a different marker type is found
-    fn clear_markers_in_line(&mut self, pos: Point, marker: ShellMarker) {
-        for col in (0..pos.column.0).rev() {
-            let col = Column(col);
-            if let Some(existing) = self.grid[pos.line][col].shell_marker() {
+    /// Scanning wraps around grid lines if the text line wraps across multiple grid lines.
+    fn clear_markers_in_text_line(&mut self, pos: Point, marker: ShellMarker) {
+        // Scan backwards / towards start of line
+        let mut scan_pos = pos;
+        loop {
+            if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
                 if existing == marker {
-                    self.grid[pos.line][col].set_shell_marker(Option::None);
+                    self.grid[scan_pos.line][scan_pos.column].set_shell_marker(Option::None);
                 } else {
                     break;
                 }
             }
+            if scan_pos.column == 0 {
+                // Start of grid line reached. Wrap around to previous grid line and continue
+                // scanning if it is a wrapped line
+                scan_pos.line -= 1;
+                scan_pos.column = self.last_column();
+                if scan_pos.line < self.grid.topmost_line() ||
+                   !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
+                {
+                    break;
+                }
+            } else {
+                scan_pos.column -= 1;
+            }
         }
-        for col in pos.column.0..self.grid.columns() {
-            let col = Column(col);
-            if let Some(existing) = self.grid[pos.line][col].shell_marker() {
+        // Scan forwards / towards end of line
+        scan_pos = pos;
+        loop {
+            if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
                 if existing == marker {
-                    self.grid[pos.line][col].set_shell_marker(Option::None);
+                    self.grid[scan_pos.line][scan_pos.column].set_shell_marker(Option::None);
                 } else {
                     break;
                 }
+            }
+            if scan_pos.column == self.last_column() {
+                // End of grid line reached. Wrap around to next grid line and continue
+                // scanning if it is a wrapped line
+                if scan_pos.line == self.grid.bottommost_line() ||
+                   !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
+                {
+                    break;
+                }
+                scan_pos.line += 1;
+                scan_pos.column = Column(0);
+            } else {
+                scan_pos.column += 1;
             }
         }
     }
@@ -1214,7 +1243,7 @@ impl<T: EventListener> Handler for Term<T> {
                     } else {
                         if marker == ShellMarker::COMMAND {
                             // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-                            self.clear_markers_in_line(self.grid.cursor.point, ShellMarker::COMMAND);
+                            self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
                         }
                         self.grid.cursor_cell().set_shell_marker(Some(marker));
                     }
