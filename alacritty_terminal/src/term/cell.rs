@@ -120,10 +120,10 @@ impl ResetDiscriminant<Color> for Cell {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum ShellMarker {
-    PROMPT,
-    COMMAND,
-    RPROMPT,
-    OUTPUT,
+    PROMPT { block_id: u32 },
+    COMMAND { block_id: u32 },
+    RPROMPT { block_id: u32 },
+    OUTPUT { block_id: u32 },
 }
 
 impl ShellMarker {
@@ -132,10 +132,10 @@ impl ShellMarker {
     #[inline]
     pub fn is_cell_marker(&self) -> bool {
         match self {
-            ShellMarker::PROMPT => false,
-            ShellMarker::COMMAND => true,
-            ShellMarker::RPROMPT => false,
-            ShellMarker::OUTPUT => true,
+            ShellMarker::PROMPT { block_id: _ } => false,
+            ShellMarker::COMMAND { block_id: _ } => true,
+            ShellMarker::RPROMPT { block_id: _ } => false,
+            ShellMarker::OUTPUT { block_id: _ } => true,
         }
     }
 }
@@ -143,10 +143,10 @@ impl ShellMarker {
 impl From<VteShellMarker> for ShellMarker {
     fn from(value: VteShellMarker) -> Self {
         match value {
-            VteShellMarker::PROMPT => ShellMarker::PROMPT,
-            VteShellMarker::COMMAND => ShellMarker::COMMAND,
-            VteShellMarker::RPROMPT => ShellMarker::RPROMPT,
-            VteShellMarker::OUTPUT => ShellMarker::OUTPUT,
+            VteShellMarker::PROMPT { block_id } => ShellMarker::PROMPT { block_id },
+            VteShellMarker::COMMAND { block_id } => ShellMarker::COMMAND { block_id },
+            VteShellMarker::RPROMPT { block_id } => ShellMarker::RPROMPT { block_id },
+            VteShellMarker::OUTPUT { block_id } => ShellMarker::OUTPUT { block_id },
         }
     }
 }
@@ -154,10 +154,10 @@ impl From<VteShellMarker> for ShellMarker {
 impl From<ShellMarker> for VteShellMarker {
     fn from(val: ShellMarker) -> Self {
         match val {
-            ShellMarker::PROMPT => VteShellMarker::PROMPT,
-            ShellMarker::COMMAND => VteShellMarker::COMMAND,
-            ShellMarker::RPROMPT => VteShellMarker::RPROMPT,
-            ShellMarker::OUTPUT => VteShellMarker::OUTPUT,
+            ShellMarker::PROMPT { block_id } => VteShellMarker::PROMPT { block_id },
+            ShellMarker::COMMAND { block_id } => VteShellMarker::COMMAND { block_id },
+            ShellMarker::RPROMPT { block_id } => VteShellMarker::RPROMPT { block_id },
+            ShellMarker::OUTPUT { block_id } => VteShellMarker::OUTPUT { block_id },
         }
     }
 }

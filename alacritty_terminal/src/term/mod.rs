@@ -292,6 +292,8 @@ pub enum ExecutionEvent {
     ExecutionStarted {
         /// Shell command that has been executed
         command: String,
+        /// ID of the related terminal block
+        block_id: u32,
     },
     ExecutionFinished {
         /// Grid state at the moment of execution finishing
@@ -300,6 +302,8 @@ pub enum ExecutionEvent {
         mode: TermMode,
         /// Information about finished command
         info: ExecutionInfo,
+        /// ID of the related terminal block
+        block_id: u32,
     },
 }
 
@@ -1073,9 +1077,9 @@ impl<T> Term<T> {
         self.damage_cursor();
         if self.grid.cursor.marker_on_wrap.is_some() {
             let marker = self.grid.cursor.marker_on_wrap.take();
-            if marker.is_some_and(|x| x == ShellMarker::COMMAND) {
+            if let Some(ShellMarker::COMMAND { block_id: _ }) = marker {
                 // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-                self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
+                self.clear_command_markers_in_text_line(self.grid.cursor.point);
             }
             self.grid.cursor_cell().set_shell_marker(marker);
         }
@@ -1092,9 +1096,9 @@ impl<T> Term<T> {
         // If template marker is None and current marker is cell marker - preserve current marker
         let template_marker = self.grid.cursor.template.shell_marker();
         let current_marker = self.grid.cursor_cell().shell_marker();
-        if template_marker.is_some_and(|x| x == ShellMarker::COMMAND) {
+        if let Some(ShellMarker::COMMAND { block_id: _ }) = template_marker {
             // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-            self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
+            self.clear_command_markers_in_text_line(self.grid.cursor.point);
         }
 
         let extra: Option<Arc<CellExtra>>;
@@ -1136,17 +1140,17 @@ impl<T> Term<T> {
         cursor_cell.extra = extra;
     }
 
-    /// Clears all occurrences of the given [`marker`] in the same text line as [`pos`].
+    /// Clears all COMMAND marker occurrences in the same text line as [`pos`].
     /// Scanning for marker occurrences starts at the specified position and stops if
     /// - the end (or start) of the text line is reached, or
     /// - a different marker type is found
     /// Scanning wraps around grid lines if the text line wraps across multiple grid lines.
-    fn clear_markers_in_text_line(&mut self, pos: Point, marker: ShellMarker) {
+    fn clear_command_markers_in_text_line(&mut self, pos: Point) {
         // Scan backwards / towards start of line
         let mut scan_pos = pos;
         loop {
             if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
-                if existing == marker {
+                if let ShellMarker::COMMAND { block_id: _ } = existing {
                     self.grid[scan_pos.line][scan_pos.column].set_shell_marker(Option::None);
                 } else {
                     break;
@@ -1170,7 +1174,7 @@ impl<T> Term<T> {
         scan_pos = pos;
         loop {
             if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
-                if existing == marker {
+                if let ShellMarker::COMMAND { block_id: _ } = existing {
                     self.grid[scan_pos.line][scan_pos.column].set_shell_marker(Option::None);
                 } else {
                     break;
@@ -1241,9 +1245,9 @@ impl<T: EventListener> Handler for Term<T> {
                     if self.grid.cursor.input_needs_wrap {
                         self.grid.cursor.marker_on_wrap = Some(marker);
                     } else {
-                        if marker == ShellMarker::COMMAND {
+                        if let ShellMarker::COMMAND { block_id: _ } = marker {
                             // clear existing command markers in the same line to avoid multiple markers in case the prompt changes
-                            self.clear_markers_in_text_line(self.grid.cursor.point, ShellMarker::COMMAND);
+                            self.clear_command_markers_in_text_line(self.grid.cursor.point);
                         }
                         self.grid.cursor_cell().set_shell_marker(Some(marker));
                     }
@@ -1255,12 +1259,12 @@ impl<T: EventListener> Handler for Term<T> {
                 let history_file = PathBuf::from(history_file);
                 self.execution_events.push(ExecutionEvent::Initialized { history_file });
             },
-            CustomOSCCommand::ShellCommandStarted { command } => {
-                self.execution_events.push(ExecutionEvent::ExecutionStarted { command });
+            CustomOSCCommand::ShellCommandStarted { command, block_id } => {
+                self.execution_events.push(ExecutionEvent::ExecutionStarted { command, block_id });
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
-            CustomOSCCommand::ShellCommandFinished { exit_code, reset_grid, working_directory  } => {
+            CustomOSCCommand::ShellCommandFinished { exit_code, reset_grid, working_directory, block_id  } => {
                 let working_directory = PathBuf::from(working_directory);
                 let elapsed_time = self.command_start_timestamp.map_or_else(
                     || {
@@ -1284,6 +1288,7 @@ impl<T: EventListener> Handler for Term<T> {
                     grid,
                     mode,
                     info: ExecutionInfo { exit_code, elapsed_time, working_directory },
+                    block_id,
                 });
             },
         }
