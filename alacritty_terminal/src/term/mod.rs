@@ -1276,7 +1276,7 @@ impl<T: EventListener> Handler for Term<T> {
                 self.skip_grid_commands = false;
                 self.command_start_timestamp = Some(Instant::now());
             },
-            CustomOSCCommand::ShellCommandFinished { exit_code, reset_grid, working_directory, block_id  } => {
+            CustomOSCCommand::ShellCommandFinished { exit_code, working_directory, block_id  } => {
                 let working_directory = PathBuf::from(working_directory);
                 let elapsed_time = self.command_start_timestamp.map_or_else(
                     || {
@@ -1290,12 +1290,7 @@ impl<T: EventListener> Handler for Term<T> {
                 let grid = self.grid.clone();
                 let mode = self.mode;
 
-                if reset_grid {
-                    self.grid_mut().reset();
-                    self.skip_grid_commands = false;
-                } else {
-                    self.grid_mut().clear_history();
-                }
+                self.grid_mut().clear_history();
                 self.execution_events.push(ExecutionEvent::ExecutionFinished {
                     grid,
                     mode,
