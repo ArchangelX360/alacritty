@@ -2137,9 +2137,9 @@ dependencies = [
 
 [[package]]
 name = "vte"
-version = "0.14.0-fleet.3"
+version = "0.14.0-fleet.4"
 source = "sparse+https://packages.jetbrains.team/crates/p/fleet/fleet-crates/"
-checksum = "9f466957c9f393e9ce4ac000689e427ac474a3b4f4c311b1b4bdf40b8a074706"
+checksum = "707059702b21db2715b5f66106c1203cda51df33bbcc84a407ef75a1ac9c7da0"
 dependencies = [
  "bitflags 2.9.4",
  "cursor-icon",
