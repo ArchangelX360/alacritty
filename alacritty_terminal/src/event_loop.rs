@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode};
+use vte::ansi::Handler;
 
 use crate::event::{self, Event, EventListener, WindowSize};
 use crate::sync::FairMutex;
@@ -43,30 +44,31 @@ pub enum Msg {
 ///
 /// Handles all the PTY I/O and runs the PTY parser which updates terminal
 /// state.
-pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
+pub struct EventLoop<T: tty::EventedPty, U: EventListener, H: Handler> {
     poll: Arc<polling::Poller>,
     pty: T,
     rx: PeekableReceiver<Msg>,
     tx: Sender<Msg>,
-    terminal: Arc<FairMutex<Term<U>>>,
+    handler: Arc<FairMutex<H>>,
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
 }
 
-impl<T, U> EventLoop<T, U>
+impl<T, U, H> EventLoop<T, U, H>
 where
     T: tty::EventedPty + event::OnResize + Send + 'static,
     U: EventListener + Send + 'static,
+    H: Handler + Send + 'static,
 {
     /// Create a new event loop.
     pub fn new(
-        terminal: Arc<FairMutex<Term<U>>>,
+        handler: Arc<FairMutex<H>>,
         event_proxy: U,
         pty: T,
         drain_on_exit: bool,
         ref_test: bool,
-    ) -> io::Result<EventLoop<T, U>> {
+    ) -> io::Result<EventLoop<T, U, H>> {
         let (tx, rx) = mpsc::channel();
         let poll = polling::Poller::new()?.into();
         Ok(EventLoop {
@@ -74,7 +76,7 @@ where
             pty,
             tx,
             rx: PeekableReceiver::new(rx),
-            terminal,
+            handler,
             event_proxy,
             drain_on_exit,
             ref_test,
@@ -113,9 +115,9 @@ where
         let mut unprocessed = 0;
         let mut processed = 0;
 
-        // Reserve the next terminal lock for PTY reading.
-        let _terminal_lease = Some(self.terminal.lease());
-        let mut terminal = None;
+        // Reserve the next handler lock for PTY reading.
+        let _handler_lease = Some(self.handler.lease());
+        let mut handler = None;
 
         loop {
             // Read from the PTY.
@@ -134,14 +136,14 @@ where
                 },
             }
 
-            // Attempt to lock the terminal.
-            let terminal = match &mut terminal {
-                Some(terminal) => terminal,
-                None => terminal.insert(match self.terminal.try_lock_unfair() {
+            // Attempt to lock the handler.
+            let handler = match &mut handler {
+                Some(handler) => handler,
+                None => handler.insert(match self.handler.try_lock_unfair() {
                     // Force block if we are at the buffer size limit.
-                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
+                    None if unprocessed >= READ_BUFFER_SIZE => self.handler.lock_unfair(),
                     None => continue,
-                    Some(terminal) => terminal,
+                    Some(handler) => handler,
                 }),
             };
 
@@ -152,7 +154,7 @@ where
 
             // Parse the incoming bytes.
             for byte in &buf[..unprocessed] {
-                state.parser.advance(&mut **terminal, *byte);
+                state.parser.advance(&mut **handler, *byte);
             }
 
             processed += unprocessed;
@@ -245,7 +247,7 @@ where
 
                 // Handle synchronized update timeout.
                 if events.is_empty() && self.rx.peek().is_none() {
-                    state.parser.stop_sync(&mut *self.terminal.lock());
+                    state.parser.stop_sync(&mut *self.handler.lock());
                     self.event_proxy.send_event(Event::Wakeup);
                     continue;
                 }
@@ -266,7 +268,7 @@ where
                                 if self.drain_on_exit {
                                     let _ = self.pty_read(&mut state, &mut buf, pipe.as_mut());
                                 }
-                                self.terminal.lock().exit();
+                                self.event_proxy.send_event(Event::Exit);
                                 self.event_proxy.send_event(Event::Wakeup);
                                 break 'event_loop;
                             }
