@@ -138,6 +138,15 @@ impl ShellMarker {
             ShellMarker::OUTPUT { block_id: _ } => true,
         }
     }
+    
+    pub fn block_id(&self) -> u32 {
+        match self {
+            ShellMarker::PROMPT { block_id } => *block_id,
+            ShellMarker::COMMAND { block_id } => *block_id,
+            ShellMarker::RPROMPT { block_id } => *block_id,
+            ShellMarker::OUTPUT { block_id } => *block_id,
+        }
+    }
 }
 
 impl From<VteShellMarker> for ShellMarker {

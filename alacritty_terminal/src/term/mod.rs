@@ -1082,7 +1082,7 @@ impl<T> Term<T> {
                 // the prompt changes. Other marker types are ignored.
                 match marker {
                     ShellMarker::COMMAND { block_id: _ } =>
-                        self.clear_markers_in_text_line(self.grid.cursor.point, marker),
+                        self.clear_duplicate_markers_in_text_line(marker, self.grid.cursor.point),
                     _ => ()
                 }
             }
@@ -1106,7 +1106,7 @@ impl<T> Term<T> {
             // the prompt changes. Other marker types are ignored.
             match marker {
                 ShellMarker::COMMAND { block_id: _ } =>
-                    self.clear_markers_in_text_line(self.grid.cursor.point, marker),
+                    self.clear_duplicate_markers_in_text_line(marker, self.grid.cursor.point),
                 _ => ()
             }
         }
@@ -1154,17 +1154,56 @@ impl<T> Term<T> {
     /// same text line as [`pos`]. Scanning for marker occurrences starts at the specified position
     /// and stops if:
     /// - the end (or start) of the text line is reached, or
-    /// - a different marker type is found
+    /// - any different marker is found
     /// Scanning wraps around grid lines if the text line wraps across multiple grid lines.
-    fn clear_markers_in_text_line(&mut self, pos: Point, marker: ShellMarker) {
+    fn clear_duplicate_markers_in_text_line(&mut self, marker: ShellMarker, pos: Point) {
+        self.scan_markers_in_text_line(pos, |m, pos, term| {
+            if m == marker {
+                term.grid[pos.line][pos.column].set_shell_marker(None);
+                Some(())
+            } else {
+                None
+            }
+        });
+    }
+
+    /// Clears markers of the same variant without a block ID in the text line (i.e. considering
+    /// wrapped lines) at the given position.
+    fn clear_markers_without_block_id_in_text_line(&mut self, marker: ShellMarker, pos: Point) {
+        let discriminant = mem::discriminant(&marker);
+        self.scan_markers_in_text_line(pos, |m, pos, term| {
+            if mem::discriminant(&m) == discriminant && m.block_id() == 0 {
+                term.grid[pos.line][pos.column].set_shell_marker(None);
+            }
+            // always return None to keep scanning for more markers
+            Option::<()>::None
+        });
+    }
+
+    /// Scans the text line at the given position and returns true if a marker is found that
+    /// - has a valid block ID (!= 0), and
+    /// - has the same variant as the given marker
+    fn has_block_id_marker_in_text_line(&mut self, marker: ShellMarker, pos: Point) -> bool {
+        let discriminant = mem::discriminant(&marker);
+        let result = self.scan_markers_in_text_line(pos, |m, _, _| {
+            if mem::discriminant(&m) == discriminant && m.block_id() != 0 {
+                Some(true)
+            } else {
+                None
+            }
+        });
+        result.unwrap_or_else(|| false)
+    }
+
+    fn scan_markers_in_text_line<F, R>(&mut self, pos: Point, f: F) -> Option<R> where
+        F: Fn(ShellMarker, Point, &mut Term<T>) -> Option<R> {
+
         // Scan backwards / towards start of line
         let mut scan_pos = pos;
         loop {
             if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
-                if existing == marker {
-                    self.grid[scan_pos.line][scan_pos.column].set_shell_marker(None);
-                } else {
-                    break;
+                if let Some(value) = f(existing, scan_pos, self) {
+                    return Some(value);
                 }
             }
             if scan_pos.column == 0 {
@@ -1173,7 +1212,7 @@ impl<T> Term<T> {
                 scan_pos.line -= 1;
                 scan_pos.column = self.last_column();
                 if scan_pos.line < self.grid.topmost_line() ||
-                   !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
+                    !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
                 {
                     break;
                 }
@@ -1185,17 +1224,15 @@ impl<T> Term<T> {
         scan_pos = pos;
         loop {
             if let Some(existing) = self.grid[scan_pos.line][scan_pos.column].shell_marker() {
-                if existing == marker {
-                    self.grid[scan_pos.line][scan_pos.column].set_shell_marker(None);
-                } else {
-                    break;
+                if let Some(value) = f(existing, scan_pos, self) {
+                    return Some(value);
                 }
             }
             if scan_pos.column == self.last_column() {
                 // End of grid line reached. Wrap around to next grid line and continue
                 // scanning if it is a wrapped line
                 if scan_pos.line == self.grid.bottommost_line() ||
-                   !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
+                    !self.grid[scan_pos.line][scan_pos.column].flags.contains(Flags::WRAPLINE)
                 {
                     break;
                 }
@@ -1205,6 +1242,7 @@ impl<T> Term<T> {
                 scan_pos.column += 1;
             }
         }
+        None
     }
 
     #[inline]
@@ -1252,6 +1290,17 @@ impl<T: EventListener> Handler for Term<T> {
         match command {
             CustomOSCCommand::MarkCell { marker } => {
                 let marker: ShellMarker = marker.into();
+                let cursor_pos = self.grid.cursor.point;
+                let block_id = marker.block_id();
+
+                if block_id == 0 && self.has_block_id_marker_in_text_line(marker, cursor_pos) {
+                    // Given shell marker has no block ID, ignore it if we already have one with ID
+                    return;
+                } else if block_id != 0 {
+                    // Shell marker has a block ID, remove all markers in same line without a block ID
+                    self.clear_markers_without_block_id_in_text_line(marker, cursor_pos)
+                }
+
                 if marker.is_cell_marker() {
                     if self.grid.cursor.input_needs_wrap {
                         self.grid.cursor.marker_on_wrap = Some(marker);
@@ -1259,7 +1308,7 @@ impl<T: EventListener> Handler for Term<T> {
                         if let ShellMarker::COMMAND { block_id: _ } = marker {
                             // Clear existing command markers in the same line to avoid multiple
                             // markers in case the prompt changes. Other marker types are ignored.
-                            self.clear_markers_in_text_line(self.grid.cursor.point, marker);
+                            self.clear_duplicate_markers_in_text_line(marker, cursor_pos);
                         }
                         self.grid.cursor_cell().set_shell_marker(Some(marker));
                     }
