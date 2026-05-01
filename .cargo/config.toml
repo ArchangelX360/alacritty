@@ -1,2 +1,0 @@
-[registries]
-space-fleet-crates = { index = "sparse+https://packages.jetbrains.team/crates/p/fleet/fleet-crates/" }
