@@ -6,7 +6,6 @@ members = [
     "alacritty_config_derive",
 ]
 resolver = "2"
-exclude = [ "alacritty_vte" ]
 
 [profile.release]
 lto = "thin"

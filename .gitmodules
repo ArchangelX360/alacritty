@@ -1,4 +1,0 @@
-[submodule "alacritty_vte"]
-	path = alacritty_vte
-	url = ssh://git@git.jetbrains.team/fleet/alacritty_vte.git
-	branch = fleet/v0.13

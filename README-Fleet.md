@@ -1,20 +1,5 @@
 # Alacritty Fleet fork instructions
 
-## Getting started
-
-`alacritty_terminal` is a main crate used in Fleet. It depends on `alacritty/vte`, which located in 
-separate repository. So, you need to init git submodules
-
-```shell
-git submodule init
-git submodule update
-```
-
-To compile `alacritty_terminal` with local `vte` version change dependency in [Cargo.toml](alacritty_terminal/Cargo.toml)
-```toml
-vte = { path = "../alacritty_vte", default-features = false, features = ["ansi", "serde"] }
-```
-
 ## Naming conventions
 
 | Concept               | Naming convention                                                   | Example                                                   |
