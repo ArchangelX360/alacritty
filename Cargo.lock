@@ -2112,7 +2112,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "utf8parse"
 version = "0.2.2"
-source = "git+https://github.com/ArchangelX360/vte.git?rev=b332983b019157fcc8a2abb803f64bb8d075db13#b332983b019157fcc8a2abb803f64bb8d075db13"
+source = "git+https://github.com/ArchangelX360/vte.git?rev=75719f40134a7b16933ef9d78a65b7c6fc4dea49#75719f40134a7b16933ef9d78a65b7c6fc4dea49"
 
 [[package]]
 name = "version_check"
@@ -2142,21 +2142,21 @@ dependencies = [
 
 [[package]]
 name = "vte"
-version = "0.14.0-fleet.4"
-source = "git+https://github.com/ArchangelX360/vte.git?rev=b332983b019157fcc8a2abb803f64bb8d075db13#b332983b019157fcc8a2abb803f64bb8d075db13"
+version = "0.13.0"
+source = "git+https://github.com/ArchangelX360/vte.git?rev=75719f40134a7b16933ef9d78a65b7c6fc4dea49#75719f40134a7b16933ef9d78a65b7c6fc4dea49"
 dependencies = [
  "bitflags 2.9.4",
  "cursor-icon",
  "log",
  "serde",
- "utf8parse 0.2.2 (git+https://github.com/ArchangelX360/vte.git?rev=b332983b019157fcc8a2abb803f64bb8d075db13)",
+ "utf8parse 0.2.2 (git+https://github.com/ArchangelX360/vte.git?rev=75719f40134a7b16933ef9d78a65b7c6fc4dea49)",
  "vte_generate_state_changes",
 ]
 
 [[package]]
 name = "vte_generate_state_changes"
 version = "0.1.2"
-source = "git+https://github.com/ArchangelX360/vte.git?rev=b332983b019157fcc8a2abb803f64bb8d075db13#b332983b019157fcc8a2abb803f64bb8d075db13"
+source = "git+https://github.com/ArchangelX360/vte.git?rev=75719f40134a7b16933ef9d78a65b7c6fc4dea49#75719f40134a7b16933ef9d78a65b7c6fc4dea49"
 dependencies = [
  "proc-macro2",
  "quote",
